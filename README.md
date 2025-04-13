@@ -111,7 +111,6 @@ This project demonstrates the power of modern data engineering tools to handle c
 ## Acknowledgments
 
 - Thanks to the open-source community for providing the tools and libraries used in this project.
-- Special thanks to my team and mentors for their support and guidance.
 
 ```
 
