@@ -1,8 +1,28 @@
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.functions import from_json, col
 from pyspark.sql.types import StructType, StructField, StringType, TimestampType, IntegerType, DoubleType
-
 from config import configuration
+
+
+def send_sns_alert(incident_row):
+    import boto3
+
+    sns = boto3.client('sns', region_name='us-east-1')  # update region as needed
+    topic_arn = "arn:aws:sns:us-east-1:730335375154:emergency_alerts"  # Replace with your actual ARN
+
+    message = f"""
+    🚨 Emergency Alert 🚨
+    Type: {incident_row['type']}
+    Location: {incident_row['location']}
+    Description: {incident_row['description']}
+    Time: {incident_row['timestamp']}
+    """
+
+    sns.publish(
+        TopicArn=topic_arn,
+        Message=message,
+        Subject="Smart City Emergency Incident"
+    )
 
 
 def main():
@@ -25,10 +45,9 @@ def main():
                 'org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider') \
         .getOrCreate()
 
-    # Adjust the log level to minimize the console output on executors
     spark.sparkContext.setLogLevel('WARN')
 
-    # vehicle schema
+    # Schemas
     vehicleSchema = StructType([
         StructField("id", StringType(), True),
         StructField("vehicle_id", StringType(), True),
@@ -42,7 +61,6 @@ def main():
         StructField("fuelType", StringType(), True),
     ])
 
-    # gpsSchema
     gpsSchema = StructType([
         StructField("id", StringType(), True),
         StructField("vehicle_id", StringType(), True),
@@ -52,7 +70,6 @@ def main():
         StructField("vehicleType", StringType(), True)
     ])
 
-    # trafficSchema
     trafficSchema = StructType([
         StructField("id", StringType(), True),
         StructField("vehicle_id", StringType(), True),
@@ -62,7 +79,6 @@ def main():
         StructField("snapshot", StringType(), True)
     ])
 
-    # weatherSchema
     weatherSchema = StructType([
         StructField("id", StringType(), True),
         StructField("vehicle_id", StringType(), True),
@@ -76,7 +92,6 @@ def main():
         StructField("airQualityIndex", DoubleType(), True),
     ])
 
-    # emergencySchema
     emergencySchema = StructType([
         StructField("id", StringType(), True),
         StructField("vehicle_id", StringType(), True),
@@ -109,12 +124,17 @@ def main():
                 .outputMode('append')
                 .start())
 
+    # Read streams
     vehicleDF = read_kafka_topic('vehicle_data', vehicleSchema).alias('vehicle')
     gpsDF = read_kafka_topic('gps_data', gpsSchema).alias('gps')
     trafficDF = read_kafka_topic('traffic_data', trafficSchema).alias('traffic')
     weatherDF = read_kafka_topic('weather_data', weatherSchema).alias('weather')
     emergencyDF = read_kafka_topic('emergency_data', emergencySchema).alias('emergency')
 
+    # Filter active emergency incidents
+    activeEmergencies = emergencyDF.filter(col("status") == "active")
+
+    # Write data to S3
     query1 = streamWriter(vehicleDF, 's3a://spark-streaming-datav1/checkpoints/vehicle_data',
                           's3a://spark-streaming-datav1/data/vehicle_data')
     query2 = streamWriter(gpsDF, 's3a://spark-streaming-datav1/checkpoints/gps_data',
@@ -126,7 +146,24 @@ def main():
     query5 = streamWriter(emergencyDF, 's3a://spark-streaming-datav1/checkpoints/emergency_data',
                           's3a://spark-streaming-datav1/data/emergency_data')
 
+    # Send SNS alerts for active emergencies
+    def notify_active_emergencies(batch_df, batch_id):
+        emergencies = batch_df.collect()
+        for row in emergencies:
+            send_sns_alert(row.asDict())
+
+    notification_query = (activeEmergencies.writeStream
+                          .foreachBatch(notify_active_emergencies)
+                          .outputMode("update")
+                          .start())
+
+    # Await all
+    query1.awaitTermination()
+    query2.awaitTermination()
+    query3.awaitTermination()
+    query4.awaitTermination()
     query5.awaitTermination()
+    notification_query.awaitTermination()
 
 
 if __name__ == "__main__":

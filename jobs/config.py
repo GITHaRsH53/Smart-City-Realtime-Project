@@ -1,4 +1,5 @@
 configuration = {
-    "AWS_ACCESS_KEY": "your access key",
-    "AWS_SECRET_KEY": "your secret key",
+    "AWS_ACCESS_KEY": "",
+    "AWS_SECRET_KEY": "",
+    "SNS_TOPIC_ARN" : "arn:aws:sns:us-east-1:730335375154:emergency_alerts",
 }
